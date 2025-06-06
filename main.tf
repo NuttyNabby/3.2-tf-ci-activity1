@@ -38,13 +38,13 @@ resource "aws_s3_bucket_versioning" "s3_tf" {
 }
 
 resource "aws_s3_bucket_logging" "s3_tf" {
-  bucket = aws_s3_bucket.s3_tf.id
+  bucket        = aws_s3_bucket.s3_tf.id
   target_bucket = "nabilah-logging-bucket"
   target_prefix = "log/"
 }
 
 resource "aws_s3_bucket_public_access_block" "s3_tf" {
-  bucket = aws_s3_bucket.s3_tf.id
+  bucket                  = aws_s3_bucket.s3_tf.id
   block_public_acls       = true
   block_public_policy     = true
   ignore_public_acls      = true
