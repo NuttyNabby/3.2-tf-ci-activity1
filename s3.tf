@@ -3,7 +3,16 @@ provider "aws" {
   region = "us-west-2"
 }
 
-# --- KMS Key with Inline Policy to Avoid Circular Dependency ---
+# --- DATA FOR CURRENT ACCOUNT ---
+data "aws_caller_identity" "current" {}
+
+# --- LOCALS ---
+locals {
+  name_prefix = split("/", data.aws_caller_identity.current.arn)[1]
+  account_id  = data.aws_caller_identity.current.account_id
+}
+
+# --- KMS KEY FOR S3 ENCRYPTION ---
 resource "aws_kms_key" "s3_key" {
   description         = "KMS key for S3 encryption"
   enable_key_rotation = true
@@ -23,7 +32,29 @@ resource "aws_kms_key" "s3_key" {
   })
 }
 
-# --- SOURCE BUCKET (us-east-1) ---
+# --- KMS KEY FOR SQS ENCRYPTION ---
+resource "aws_kms_key" "sqs_cmk" {
+  description         = "Customer managed CMK for encrypting SQS queue"
+  enable_key_rotation = true
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Id      = "key-default-1",
+    Statement = [
+      {
+        Sid    = "AllowRootAccount",
+        Effect = "Allow",
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        },
+        Action   = ["kms:*"],
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+# --- SOURCE BUCKET ---
 resource "aws_s3_bucket" "s3_tf" {
   bucket = format("%s-s3-tf-bkt-%s", local.name_prefix, local.account_id)
 }
@@ -76,14 +107,15 @@ resource "aws_s3_bucket_lifecycle_configuration" "s3_tf" {
       days_after_initiation = 7
     }
 
-    filter {} # Required since prefix is deprecated
+    filter {}
   }
 }
 
 resource "aws_s3_bucket_notification" "bucket_notification" {
   bucket = aws_s3_bucket.s3_tf.id
 }
-# --- DESTINATION BUCKET (us-west-2) ---
+
+# --- DESTINATION BUCKET ---
 resource "aws_s3_bucket" "replication_dest" {
   provider = aws.replica
   bucket   = "nabilah-s3-replication-dest"
@@ -146,6 +178,24 @@ resource "aws_s3_bucket_logging" "replication_dest" {
   target_prefix = "replica-log/"
 }
 
+# --- SQS QUEUE FOR NOTIFICATIONS ---
+resource "aws_sqs_queue" "s3_events" {
+  name                              = "replication-dest-events"
+  kms_master_key_id                 = aws_kms_key.sqs_cmk.arn
+  kms_data_key_reuse_period_seconds = 300
+}
+
+resource "aws_s3_bucket_notification" "replication_dest_notify" {
+  bucket = aws_s3_bucket.replication_dest.id
+
+  queue {
+    queue_arn = aws_sqs_queue.s3_events.arn
+    events    = ["s3:ObjectCreated:*"]
+  }
+
+  depends_on = [aws_sqs_queue.s3_events]
+}
+
 # --- REPLICATION ROLE AND POLICY ---
 resource "aws_iam_role" "replication" {
   name = "s3-replication-role"
@@ -175,9 +225,7 @@ resource "aws_iam_role_policy" "replication_policy" {
           "s3:GetReplicationConfiguration",
           "s3:ListBucket"
         ],
-        Resource = [
-          aws_s3_bucket.s3_tf.arn
-        ]
+        Resource = [aws_s3_bucket.s3_tf.arn]
       },
       {
         Effect = "Allow",
@@ -188,18 +236,12 @@ resource "aws_iam_role_policy" "replication_policy" {
           "s3:ReplicateDelete",
           "s3:ReplicateTags"
         ],
-        Resource = [
-          "${aws_s3_bucket.s3_tf.arn}/*"
-        ]
+        Resource = ["${aws_s3_bucket.s3_tf.arn}/*"]
       },
       {
-        Effect = "Allow",
-        Action = [
-          "s3:ReplicateObject"
-        ],
-        Resource = [
-          "${aws_s3_bucket.replication_dest.arn}/*"
-        ]
+        Effect   = "Allow",
+        Action   = ["s3:ReplicateObject"],
+        Resource = ["${aws_s3_bucket.replication_dest.arn}/*"]
       }
     ]
   })
@@ -228,46 +270,4 @@ resource "aws_s3_bucket_replication_configuration" "replication" {
     aws_s3_bucket_versioning.s3_tf,
     aws_s3_bucket_versioning.replication_dest
   ]
-}
-resource "aws_sqs_queue" "s3_events" {
-  name                              = "replication-dest-events"
-  kms_master_key_id                 = aws_kms_key.sqs_cmk.arn
-  kms_data_key_reuse_period_seconds = 300 # Optional: reuse data key for 5 minutes
-}
-
-resource "aws_s3_bucket_notification" "replication_dest_notify" {
-  bucket = aws_s3_bucket.replication_dest.id
-
-  queue {
-    queue_arn = aws_sqs_queue.s3_events.arn
-    events    = ["s3:ObjectCreated:*"]
-  }
-
-  depends_on = [aws_sqs_queue.s3_events]
-}
-resource "aws_kms_key" "sqs_cmk" {
-  description         = "Customer managed CMK for encrypting SQS queue"
-  enable_key_rotation = true
-}
-resource "aws_kms_key" "sqs_cmk" {
-  description         = "Customer managed CMK for encrypting SQS queue"
-  enable_key_rotation = true
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Id      = "key-default-1"
-    Statement = [
-      {
-        Sid    = "AllowRootAccount"
-        Effect = "Allow"
-        Principal = {
-          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
-        }
-        Action = [
-          "kms:*"
-        ]
-        Resource = "*"
-      }
-    ]
-  })
 }
