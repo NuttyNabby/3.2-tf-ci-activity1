@@ -237,8 +237,8 @@ resource "aws_s3_bucket_notification" "replication_dest_notify" {
   bucket = aws_s3_bucket.replication_dest.id
 
   queue {
-    queue_arn     = aws_sqs_queue.s3_events.arn
-    events        = ["s3:ObjectCreated:*"]
+    queue_arn = aws_sqs_queue.s3_events.arn
+    events    = ["s3:ObjectCreated:*"]
   }
 
   depends_on = [aws_sqs_queue.s3_events]
