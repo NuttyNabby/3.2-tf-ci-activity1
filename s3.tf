@@ -231,8 +231,8 @@ resource "aws_s3_bucket_replication_configuration" "replication" {
 }
 resource "aws_sqs_queue" "s3_events" {
   name                              = "replication-dest-events"
-  kms_master_key_id                 = "alias/aws/sqs" # AWS-managed KMS key
-  kms_data_key_reuse_period_seconds = 300             # Optional: reuse data key for 5 minutes
+  kms_master_key_id                 = aws_kms_key.sqs_cmk.arn
+  kms_data_key_reuse_period_seconds = 300 # Optional: reuse data key for 5 minutes
 }
 
 resource "aws_s3_bucket_notification" "replication_dest_notify" {
@@ -244,4 +244,8 @@ resource "aws_s3_bucket_notification" "replication_dest_notify" {
   }
 
   depends_on = [aws_sqs_queue.s3_events]
+}
+resource "aws_kms_key" "sqs_cmk" {
+  description         = "Customer managed CMK for encrypting SQS queue"
+  enable_key_rotation = true
 }
