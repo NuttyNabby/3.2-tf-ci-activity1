@@ -2,16 +2,6 @@ provider "aws" {
   alias  = "replica"
   region = "us-west-2"
 }
-
-# --- DATA FOR CURRENT ACCOUNT ---
-data "aws_caller_identity" "current" {}
-
-# --- LOCALS ---
-locals {
-  name_prefix = split("/", data.aws_caller_identity.current.arn)[1]
-  account_id  = data.aws_caller_identity.current.account_id
-}
-
 # --- KMS KEY FOR S3 ENCRYPTION ---
 resource "aws_kms_key" "s3_key" {
   description         = "KMS key for S3 encryption"
