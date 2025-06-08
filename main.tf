@@ -1,0 +1,27 @@
+terraform {
+  required_version = ">= 1.3.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 4.0.0"
+    }
+  }
+
+  backend "s3" {
+    bucket = "nabs-sctp-ce9-tfstate"
+    key    = "nabilah-s3-tf-ci.tfstate" #Change this
+    region = "us-east-1"
+  }
+}
+
+provider "aws" {
+  region = "us-east-1"
+}
+
+data "aws_caller_identity" "current" {}
+
+locals {
+  name_prefix = split("/", data.aws_caller_identity.current.arn)[1]
+  account_id  = data.aws_caller_identity.current.account_id
+}
