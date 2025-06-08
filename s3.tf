@@ -68,7 +68,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "s3_tf" {
     id     = "expire-old-objects"
     status = "Enabled"
 
-    filter {}  # this applies to all objects
+    filter {} # this applies to all objects
 
     expiration {
       days = 365
