@@ -249,3 +249,25 @@ resource "aws_kms_key" "sqs_cmk" {
   description         = "Customer managed CMK for encrypting SQS queue"
   enable_key_rotation = true
 }
+resource "aws_kms_key" "sqs_cmk" {
+  description         = "Customer managed CMK for encrypting SQS queue"
+  enable_key_rotation = true
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Id      = "key-default-1"
+    Statement = [
+      {
+        Sid    = "AllowRootAccount"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+        Action = [
+          "kms:*"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
