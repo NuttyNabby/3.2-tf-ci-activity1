@@ -1,36 +1,36 @@
-
 provider "aws" {
   alias  = "replica"
-  region = "us-west-2" # destination region
+  region = "us-west-2"
 }
 
-# ===== DATA SOURCES =====
-
-data "aws_iam_policy_document" "kms_policy" {
-  statement {
-    actions   = ["kms:*"]
-    resources = ["*"]
-    principals {
-      type        = "AWS"
-      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
-    }
-  }
-}
-
-# ===== KMS KEY =====
+# --- KMS Key with Inline Policy to Avoid Circular Dependency ---
 resource "aws_kms_key" "s3_key" {
   description         = "KMS key for S3 encryption"
   enable_key_rotation = true
-  policy              = data.aws_iam_policy_document.kms_policy.json
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        },
+        Action   = "kms:*",
+        Resource = "*"
+      }
+    ]
+  })
 }
 
-# ===== SOURCE BUCKET (us-east-1) =====
+# --- SOURCE BUCKET (us-east-1) ---
 resource "aws_s3_bucket" "s3_tf" {
   bucket = format("%s-s3-tf-bkt-%s", local.name_prefix, local.account_id)
 }
 
 resource "aws_s3_bucket_versioning" "s3_tf" {
   bucket = aws_s3_bucket.s3_tf.id
+
   versioning_configuration {
     status = "Enabled"
   }
@@ -68,8 +68,6 @@ resource "aws_s3_bucket_lifecycle_configuration" "s3_tf" {
     id     = "expire-old-objects"
     status = "Enabled"
 
-    filter {} # this applies to all objects
-
     expiration {
       days = 365
     }
@@ -77,10 +75,15 @@ resource "aws_s3_bucket_lifecycle_configuration" "s3_tf" {
     abort_incomplete_multipart_upload {
       days_after_initiation = 7
     }
+
+    filter {} # Required since prefix is deprecated
   }
 }
 
-# ===== DESTINATION BUCKET (us-west-2) =====
+resource "aws_s3_bucket_notification" "bucket_notification" {
+  bucket = aws_s3_bucket.s3_tf.id
+}
+# --- DESTINATION BUCKET (us-west-2) ---
 resource "aws_s3_bucket" "replication_dest" {
   provider = aws.replica
   bucket   = "nabilah-s3-replication-dest"
@@ -89,12 +92,61 @@ resource "aws_s3_bucket" "replication_dest" {
 resource "aws_s3_bucket_versioning" "replication_dest" {
   provider = aws.replica
   bucket   = aws_s3_bucket.replication_dest.id
+
   versioning_configuration {
     status = "Enabled"
   }
 }
 
-# ===== IAM ROLE FOR REPLICATION =====
+resource "aws_s3_bucket_public_access_block" "replication_dest" {
+  provider                = aws.replica
+  bucket                  = aws_s3_bucket.replication_dest.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "replication_dest" {
+  provider = aws.replica
+  bucket   = aws_s3_bucket.replication_dest.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      kms_master_key_id = aws_kms_key.s3_key.arn
+      sse_algorithm     = "aws:kms"
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "replication_dest" {
+  provider = aws.replica
+  bucket   = aws_s3_bucket.replication_dest.id
+
+  rule {
+    id     = "expire-replicated-objects"
+    status = "Enabled"
+
+    expiration {
+      days = 365
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+
+    filter {}
+  }
+}
+
+resource "aws_s3_bucket_logging" "replication_dest" {
+  provider      = aws.replica
+  bucket        = aws_s3_bucket.replication_dest.id
+  target_bucket = "nabilah-logging-bucket"
+  target_prefix = "replica-log/"
+}
+
+# --- REPLICATION ROLE AND POLICY ---
 resource "aws_iam_role" "replication" {
   name = "s3-replication-role"
 
@@ -153,7 +205,7 @@ resource "aws_iam_role_policy" "replication_policy" {
   })
 }
 
-# ===== REPLICATION CONFIGURATION =====
+# --- REPLICATION CONFIGURATION ---
 resource "aws_s3_bucket_replication_configuration" "replication" {
   bucket = aws_s3_bucket.s3_tf.id
   role   = aws_iam_role.replication.arn
@@ -163,7 +215,7 @@ resource "aws_s3_bucket_replication_configuration" "replication" {
     status = "Enabled"
 
     filter {
-      prefix = "" # replicate all
+      prefix = ""
     }
 
     destination {
